@@ -95,7 +95,7 @@ async function matchByFaceting(...keys){
 async function testObjectInspection(){
     console.log("\n Testing Method 1: Object Inspection")
     await createEvent(events)
-    let matches
+
     // Find the match (disabled_access=true)
     console.log("\ndisabled_access=true")
     matches = await matchByInspection(['disabled_access', true])
@@ -120,7 +120,6 @@ async function test_faceted_search(){
     await createEventWithLookUp(events)
     // Test function for Method 2: Faceted Search
     console.log("\n Testing Method 2: Faceted Search")
-
 
     //Find the match (disabled_access=true)
     console.log("\ndisabled_access=true")
@@ -147,6 +146,6 @@ async function test_faceted_search(){
     });
     redisClient.on('error', err => console.log('Redis client Error ', err))
     await redisClient.connect()
-    await testObjectInspection()
-    await test_faceted_search()
+    await testObjectInspection() // Time complexity = lets assume we have to do 3 scan at worst and 3 get so timeComplexity = 3scan + 3get
+    await test_faceted_search() // Time complexity = min{cardinality of all the sets} * Total number of sets  => This is best suited when data distribution in one set is les compared to other and number of sets is less.
 })();
