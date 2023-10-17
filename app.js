@@ -1,4 +1,5 @@
 const {createClient} = require('redis');
+const {createHash} = require('crypto')
 const keynameHelper = require('./Utils/keynameHelper');
 
 let redisClient;
@@ -140,12 +141,75 @@ async function test_faceted_search(){
     console.log("\n" + matches[i])
 }
 
+
+// Method 3 : Hashed Faceted Search
+
+async function createEventHashedLookup(events){
+    // await createEvent(events)
+    for(let i = 0; i < events.length; i++){
+        hfs = []
+        for(let j = 0; j < lookUpAttr.length; j++){
+            if(events[i].hasOwnProperty(lookUpAttr[j])){
+                hfs.push(lookUpAttr[j], events[i][lookUpAttr[j]])
+            }
+            let x = hfs
+            let hashedVal = createHash('sha256').update(x.join("")).digest('hex')
+            hfsKeyname = keynameHelper.createKeyName("hfs", hashedVal)
+            redisClient.sAdd(hfsKeyname, events[i]['sku'])
+        }
+    }
+}
+
+async function matchByHashFaceting(...keys){
+    let facets = []
+    let matches = []
+    for(let i = 0; i < lookUpAttr.length; i++){
+        let lookUpKey = lookUpAttr[i]
+
+        for(let j = 0; j < keys.length; j++){
+            if(lookUpKey == keys[j][0])
+            facets.push(keys[j][0], keys[j][1])
+        }
+    }
+    hashedVal = createHash('sha256').update(facets.join("")).digest('hex')
+    hashedKey = keynameHelper.createKeyName("hfs", hashedVal)
+    for await (const member of redisClient.sScanIterator(hashedKey, {COUNT: 1000})){
+        matches.push (member)
+    }
+
+    return matches;
+}
+
+async function testHashedFacetedSearch(){
+    await createEventHashedLookup(events)
+    console.log("\n Testing Method3: Hashed Faceted Search")
+
+    //Find the match (disabled_access=true)
+    console.log("\ndisabled_access=true")
+    matches = await matchByHashFaceting (['disabled_access', true])
+    for(let i = 0; i < matches.length; i++)
+    console.log("\n" + matches[i])
+
+    // Find the match (disabled_access=true, medal_event=false)
+    console.log("\ndisabled_access=true, medal_event=false")
+    matches = await matchByHashFaceting(['disabled_access', true], ['medal_event', false])
+    for(let i = 0; i < matches.length; i++)
+    console.log("\n" + matches[i])
+
+    // Find the match (disabled_access=false, medal_event=false, venue='Nippon Budokan')
+    console.log("\ndisabled_access=false, medal_event=false, venue=Nippon Budokan")
+    matches = await matchByHashFaceting(['disabled_access', false], ['medal_event', false], ['venue', 'Nippon Budokan'])
+    for(let i = 0; i < matches.length; i++)
+    console.log("\n" + matches[i])
+}
+
 (async () => {
     redisClient = createClient({
         url : 'redis://default:NWx4nx6BFhpnBF6hRBrb@localhost:6379'
     });
     redisClient.on('error', err => console.log('Redis client Error ', err))
     await redisClient.connect()
-    await testObjectInspection() // Time complexity = lets assume we have to do 3 scan at worst and 3 get so timeComplexity = 3scan + 3get
+    await testObjectInspection() // Time complexity = Nscan + Nget
     await test_faceted_search() // Time complexity = min{cardinality of all the sets} * Total number of sets  => This is best suited when data distribution in one set is les compared to other and number of sets is less.
+    await testHashedFacetedSearch();
 })();
