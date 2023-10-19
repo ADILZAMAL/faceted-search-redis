@@ -211,5 +211,5 @@ async function testHashedFacetedSearch(){
     await redisClient.connect()
     await testObjectInspection() // Time complexity = Nscan + Nget
     await test_faceted_search() // Time complexity = min{cardinality of all the sets} * Total number of sets  => This is best suited when data distribution in one set is les compared to other and number of sets is less.
-    await testHashedFacetedSearch();
+    await testHashedFacetedSearch(); // Time complexity = cardinality of the set matched for the given attribute values combination
 })();
