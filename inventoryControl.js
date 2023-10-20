@@ -1,4 +1,4 @@
-const {createClient} = require('redis')
+const {createClient, RedisFlushModes} = require('redis')
 const {createKeyName} = require('./Utils/keynameHelper')
 const {v4} = require('uuid')
 
@@ -116,6 +116,51 @@ function creditAuth(customer, price){
     return true
 }
 
+
+async function expireReservation(eventSku, cutOffTimeSec=30){
+    // Check if some reservation has exceeded cutOffTime. If any have, backout the reservation and return the seat to available inventry pool
+    cutOfTs = Date.now() - cutOffTimeSec*1000
+    holdKey = createKeyName('ticket_hold', eventSku)
+
+    for await (const {field, value} of redisClient.hScanIterator(holdKey, {COUNT: 1000, MATCH: "ts:*"})){
+        console.log("Testing3", field, value, cutOfTs)
+        if(value < cutOfTs){
+            console.log("testing", eventSku,field)
+            await backOutHold(eventSku, field.split(':')[1])
+        }
+    }
+
+    // for(const {field, value} of redisClient.hScan(holdKey)){
+    //     if (value < cutOfTs){
+    //         let {_, orderId} = field.split(':')
+    //         backOutHold(eventSku, orderId)
+    //     }
+    // }
+
+}
+// 320-GHI-921 VPIR6X
+async function backOutHold(eventSku, orderId){
+    try{
+        p = redisClient.multi()
+        key = createKeyName("event", eventSku)
+        redisClient.watch(key)
+        holdKey = createKeyName("ticket_hold", eventSku)
+        qty = await redisClient.hGet(holdKey, "qty:"+orderId) //3
+        tier = await redisClient.hGet(holdKey, "tier:"+orderId) //Genral  VPIR6X
+        console.log("testing", qty, tier, orderId)
+        p.hIncrBy(key, "available:"+tier, qty)
+        p.hIncrBy(key, "held:"+tier, -qty)
+        // Remove the hold, since it is no longer needed
+        p.hDel(holdKey, "qty:"+orderId)
+        p.hDel(holdKey, "tier:"+orderId)
+        p.hDel(holdKey, "ts:"+orderId)
+        p.exec()
+    }
+    catch(err){
+        console.log("\nWrite conlict on backOutHold: ", err)
+    }
+}
+
 async function reserve(customer, eventSku, qty, tier="General"){
 // First reserve the inventory and perform a credit authorization. If successful
 // then confirm the invetory deduction or back out the deduction.
@@ -189,6 +234,50 @@ await reserve(requestor, eventRequested, 5)
 await printEventDetails(eventRequested)
 }
 
+async function createExpireReservation(eventSku, tier="General"){
+    currTimestamp = Date.now()
+    holdKey = createKeyName("ticket_hold", eventSku)
+    tickets = {"available:General": 485,"held:General": 15}
+    holds = {'qty:VPIR6X': 3, 'tier:VPIR6X': tier, 'ts:VPIR6X': currTimestamp - 50000,
+    'qty:B1BFG7': 5, 'tier:B1BFG7': tier, 'ts:B1BFG7': currTimestamp - 20000,
+    'qty:UZ1EL0': 7, 'tier:UZ1EL0': tier, 'ts:UZ1EL0': currTimestamp - 30000
+   }
+   key = createKeyName("event", eventSku)
+   await redisClient.hSet(holdKey, holds)
+   await redisClient.hSet(key, tickets)
+}
+
+async function testExpireReservation(){
+    console.log("\nTest 3: Backout expired reservation")
+    await createEvent(events)
+
+    // Create expired event
+    eventRequested="320-GHI-921"
+    await createExpireReservation(eventRequested)
+
+    tier="General"
+    holdKey = createKeyName("ticket_hold", eventRequested)
+    key = createKeyName("event", eventRequested)
+    flag = true
+    while(true){
+        flag=false
+        await expireReservation(eventRequested)
+        outstanding = await redisClient.HMGET(holdKey, ["qty:VPIR6X", "qty:B1BFG7", "qty:UZ1EL0"])
+        available = await redisClient.hGet(key, "available:" + tier)
+        console.log(`\n${eventRequested}, Available:${available}, Reservations:${outstanding}.`)
+        console.log("outstanding", outstanding.join(',').replace(/,/g, '').length === 0)
+        if (outstanding.join(',').replace(/,/g, '').length === 0)
+            break   
+        else
+            await sleep(10000)
+    }
+    console.log("\nTest expire reservation completed!")
+}
+
+function sleep(ms){
+    return new Promise (resolve => setTimeout(resolve, ms))
+}
+
 async function main(){
     redisClient = createClient({
         url : 'redis://default:NWx4nx6BFhpnBF6hRBrb@localhost:6379'
@@ -196,7 +285,8 @@ async function main(){
     redisClient.on('error', error => console.log("Redis client error", error))
     await redisClient.connect();
     // testCheckAndPurpose()
-    await testReserve()
+    // await testReserve()
+    await testExpireReservation()
 }
 
 
