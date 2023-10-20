@@ -75,7 +75,7 @@ async function checkAvailabilityAndPurchase(customer, eventSku, qty, tier="Gener
         console.log("Write conflict check availability and purchase:", err)
     }
     finally{
-        p.discard()
+        p.reset()
     }
 
     console.log("Purchase complete!")
@@ -108,13 +108,95 @@ async function testCheckAndPurpose(){
     await printEventDetails(eventRequested)
 }
 
+function creditAuth(customer, price){
+// Test function to approve/deni an authorization request
+    if (customer.toUpperCase() == "JOAN")
+        return false
+    else
+    return true
+}
+
+async function reserve(customer, eventSku, qty, tier="General"){
+// First reserve the inventory and perform a credit authorization. If successful
+// then confirm the invetory deduction or back out the deduction.
+    p = redisClient.multi()
+    try{
+        key = createKeyName("event", eventSku)
+        await redisClient.watch(key)
+        available = parseInt(await redisClient.hGet(key, "available:"+tier), 10)
+        price = parseFloat(await redisClient.hGet(key, "price:"+tier))
+        if(available >= qty){
+            orderId = v4()
+            timestamp = Date.now()
+            p.hIncrBy(key, "available:" + tier, -qty)
+            p.hIncrBy(key, "held:" + tier, qty)
+            // create a hash to store seat hold info
+            holdKey = createKeyName("ticket_hold", eventSku)
+            console.log(holdKey)
+            p.hSetNX(holdKey, "qty:"+orderId, tier)
+            p.hSetNX(holdKey, "tier:" + orderId, tier)
+            p.hSetNX(holdKey, "ts:" + orderId, timestamp.toString())
+            p.exec()
+        }
+        else
+        console.log(`Seats not available, have ${available}, requested ${qty}`)
+    }
+    catch(err){
+        console.log("Write conflict in reserve:", err)
+    }
+
+    if (creditAuth(customer, qty * price)){
+        try{
+            p = redisClient.multi()
+            purchase={'order_id': orderId, 'customer': customer,
+            'tier': tier, 'qty': qty, 'cost': qty * price,
+            'event_sku': eventSku, 'ts': timestamp}
+
+            redisClient.watch(key)
+            // Remove the seat hold, since it is no longer neede
+            p.hDel(holdKey, "qty:"+orderId)
+            p.hDel(holdKey, "tier:"+orderId)
+            p.hDel(holdKey, "ts:"+orderId)
+            //Update the event
+            p.hIncrBy(key, "held:"+tier, -qty)
+            // Post the sales order
+            soKey = createKeyName("sales_order", orderId)
+            p.hSet(soKey, purchase)
+            p.exec()
+        }
+        catch(err){
+            console.log("\nWrite conflict in reserve:", err)
+        }
+        console.log("\nPurchase complete!")
+    }
+    else{
+        console.log(`\nAuth failed on order ${orderId} for customer ${customer} for price ${price * qty}`)
+        backOutHold(eventSku, orderId)
+    }
+}
+
+async function testReserve(){
+// Test function reserve  & credit auth
+console.log("\n Test 2: Reserve stock, perform auth and complete purchase")
+// Create events with 10 tickets available
+await createEvent(events, 10)
+
+// Make purchase 
+console.log("\nReserve & purchase 5 seats")
+requestor = "jamie"
+eventRequested = "737-DEF-911"
+await reserve(requestor, eventRequested, 5)
+await printEventDetails(eventRequested)
+}
+
 async function main(){
     redisClient = createClient({
         url : 'redis://default:NWx4nx6BFhpnBF6hRBrb@localhost:6379'
     });
     redisClient.on('error', error => console.log("Redis client error", error))
     await redisClient.connect();
-    testCheckAndPurpose()
+    // testCheckAndPurpose()
+    await testReserve()
 }
 
 
