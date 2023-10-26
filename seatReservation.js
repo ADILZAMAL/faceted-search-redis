@@ -48,13 +48,64 @@ async function testCreateSeat(){
     await printSeatMap(eventSku)
 }
 
+function getAvailable(seatMap, seatRequired){
+    seatsArrangment = []
+    totalSeats = 10;
+    if (seatRequired <= 10){
+        requiredBlock = Math.pow(2, seatRequired) - 1;
+        for(let i = 1; i <= totalSeats; i++){
+            if((seatMap & requiredBlock) == requiredBlock){
+                seatsArrangment.push({'firstSeat': i, 'lastSeat': i + seatRequired - 1})
+            }
+            requiredBlock = requiredBlock << 1
+        }
+    }
+    return [...seatsArrangment]
+}
+
+async function findSeatSelection(eventSku, tier, seatsRequired){
+    // Find seats ranges that meet the criteria
+    // Get all the seat row
+    seats = []
+    key = createKeyName("seatmap", eventSku, tier, "*")
+    for await (const block of redisClient.scanIterator({MATCH: key, COUNT: 1000})){
+        bitcount = await redisClient.bitCount(block)
+        if(bitcount < seatsRequired){
+            console.log(`Row ${block} doesn't have enough seats.`)
+        }else{
+            [_, _, tier, blockNumber] = block.split(':')
+            seatMap = await getEventSeatBlock(eventSku, tier, blockNumber)
+            let blockAvailability = getAvailable(seatMap, seatsRequired)
+            if (blockAvailability.length > 0 ){
+                const obj =  {'event': eventSku, 'tier': tier, 'block': blockNumber, 'available': [...blockAvailability]}
+                seats.push(obj)
+            }
+        }
+    }
+    return seats;
+}
+
+async function testFindSeat(){
+    // Test function to find various combinations of seats.
+    console.log("Test - Find Seats")
+    eventSku = "123-ABC-723"
+    await createEvent(eventSku, 2, 10)
+
+    console.log("Find 6 contiguous available seats")
+    availableSeats = await findSeatSelection(eventSku, "General", 6)
+    for(const obj of availableSeats){
+        console.log(obj)
+    }
+}
+
 async function main(){
     redisClient = createClient({
         url : 'redis://default:NWx4nx6BFhpnBF6hRBrb@localhost:6379'
     });
     redisClient.on('error', error => console.log("Redis client error", error))
     await redisClient.connect()
-    testCreateSeat()
+    // testCreateSeat()
+    testFindSeat()
 }
 
 main()
