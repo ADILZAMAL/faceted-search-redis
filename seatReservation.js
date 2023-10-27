@@ -20,6 +20,12 @@ async function getEventSeatBlock(eventSku, tier, blockName){
     return redisClient.sendCommand(['BITFIELD', key, 'GET', 'u32', 0 + ''])
 }
 
+async function setSeatMap(eventSku, tier, blockNumber, seatMap){
+    // Set the seat map to given value
+    key = createKeyName('seatmap', eventSku, tier, blockNumber)
+    redisClient.sendCommand(['BITFIELD', key, 'SET', 'u32', 0 + '', seatMap.toString()])
+}
+
 async function printSeatMap(eventSku, tier="*"){
     // Format the seatMap for display purpose.
     key = createKeyName("seatmap", eventSku, tier)
@@ -92,6 +98,16 @@ async function testFindSeat(){
     await createEvent(eventSku, 2, 10)
 
     console.log("Find 6 contiguous available seats")
+    availableSeats = await findSeatSelection(eventSku, "General", 6)
+    for(const obj of availableSeats){
+        console.log(obj)
+    }
+
+    // Check that we skip rows
+    console.log("Remove a 4 seat from Block 1, so only Block 2 has the right availability for 6 seats")
+    // unset bit from 2-5
+    setSeatMap(eventSku, "General", '1', Math.pow(2, 10) - 31)
+    printSeatMap(eventSku)
     availableSeats = await findSeatSelection(eventSku, "General", 6)
     for(const obj of availableSeats){
         console.log(obj)
